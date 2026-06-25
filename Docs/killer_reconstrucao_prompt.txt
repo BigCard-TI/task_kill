@@ -1,0 +1,515 @@
+================================================================================
+  PROMPT DE RECONSTRUÇÃO — killer.bat
+  Gerenciador de Processos - TI
+  Versão 1.0
+================================================================================
+
+Você deve recriar exatamente o script Windows Batch descrito abaixo.
+Leia todas as seções antes de escrever qualquer linha de código.
+O arquivo final deve se chamar killer.bat e funcionar identicamente ao original.
+
+================================================================================
+SEÇÃO 1 — IDENTIDADE DO SOFTWARE
+================================================================================
+
+Nome:       Gerenciador de Processos - TI
+Arquivo:    killer.bat
+Linguagem:  Windows Batch Script (.bat)
+Executor:   cmd.exe nativo do Windows
+Requisito:  Windows 10 build 1511 ou superior / Windows 11
+Permissão:  Recomendado executar como Administrador
+
+Propósito:
+  Ferramenta interativa para equipes de TI que permite listar, filtrar e
+  encerrar processos do Windows pelo PID, com interface colorida via ANSI
+  e registro completo de auditoria em log.
+
+================================================================================
+SEÇÃO 2 — CABEÇALHO OBRIGATÓRIO DO SCRIPT
+================================================================================
+
+As três primeiras linhas executáveis do script devem ser exatamente:
+
+  @echo off
+  chcp 65001 > nul
+  setlocal enabledelayedexpansion
+  title Gerenciador de Processos - TI
+
+Explicações:
+  @echo off             — suprime eco de comandos no terminal
+  chcp 65001 > nul      — define encoding UTF-8 (necessário para caracteres especiais)
+  setlocal enabledelayedexpansion — habilita uso de !VAR! dentro de blocos if/for
+  title ...             — define o título da janela do terminal
+
+================================================================================
+SEÇÃO 3 — SISTEMA DE CORES ANSI
+================================================================================
+
+As cores devem ser geradas pelo seguinte bloco, que obtém o caractere ESC
+via truque nativo do cmd.exe (compatível com Win10 1511+ e Win11):
+
+  for /f %%a in ('echo prompt $E^| cmd') do set "ESC=%%a"
+
+Em seguida, declarar TODAS as variáveis de cor abaixo (sem exceção):
+
+  set "RESET=%ESC%[0m"
+  set "BOLD=%ESC%[1m"
+  set "CYAN=%ESC%[96m"
+  set "CYAN_D=%ESC%[36m"
+  set "GREEN=%ESC%[92m"
+  set "RED=%ESC%[91m"
+  set "YELLOW=%ESC%[93m"
+  set "BLUE=%ESC%[94m"
+  set "MAGENTA=%ESC%[95m"
+  set "WHITE=%ESC%[97m"
+  set "GRAY=%ESC%[90m"
+
+Regra de uso:
+  - Todo texto colorido DEVE terminar com %RESET%
+  - BOLD só é aplicado em títulos de cabeçalho, sempre seguido de %WHITE%
+  - Nunca usar %BOLD% em textos longos — apenas em títulos de caixas
+
+================================================================================
+SEÇÃO 4 — VARIÁVEIS DE CONFIGURAÇÃO
+================================================================================
+
+Declarar imediatamente após o bloco de cores:
+
+  set LOG_DIR=C:\Logs\GerenciadorProcessos
+  set LOG_FILE=%LOG_DIR%\processos_%COMPUTERNAME%.log
+  set SESSAO_TEMP=%TEMP%\gp_sessao_%RANDOM%.tmp
+  set SESSAO_COUNT=0
+
+Lógica de criação do diretório de log (fallback para %TEMP% se sem permissão):
+
+  if not exist "%LOG_DIR%" (
+      mkdir "%LOG_DIR%" 2>nul
+      if !ERRORLEVEL! neq 0 (
+          set LOG_FILE=%TEMP%\processos_%COMPUTERNAME%.log
+      )
+  )
+
+Inicializar arquivo de sessão (criar vazio):
+
+  echo. > "%SESSAO_TEMP%"
+
+Variáveis de trabalho (declaradas inline, sem seção própria):
+  OPCAO         — opção digitada no menu principal
+  FILTRO        — termo de busca digitado pelo usuário
+  PID           — PID digitado pelo usuário para encerramento
+  PROC_NOME     — nome do processo obtido via for /f sobre tasklist
+  KILL_ERR      — captura imediata do ERRORLEVEL após taskkill
+  CONFIRM       — confirmação [S/N] digitada pelo usuário
+  ACOES         — contador local usado no label :HISTORICO
+
+================================================================================
+SEÇÃO 5 — ESTRUTURA DE LABELS (ARQUITETURA)
+================================================================================
+
+O script é composto pelos seguintes labels, nesta ordem:
+
+  :MENU               — menu principal (loop central)
+  :LISTAR_TUDO        — lista todos os processos
+  :FILTRAR            — filtra processos por nome
+  :ENCERRAR_PROCESSO  — valida PID, confirma e executa taskkill
+  :KILL_SUCESSO       — handler de sucesso do taskkill
+  :KILL_FALHA         — handler de falha do taskkill
+  :KILL_FIM           — convergência pós-kill (limpeza e pausa)
+  :HISTORICO          — exibe histórico da sessão atual
+  :REGISTRAR_LOG      — subrotina: grava no log persistente
+  :REGISTRAR_SESSAO   — subrotina: grava no log temporário de sessão
+  :SAIR               — resumo final e encerramento do script
+
+Fluxo de navegação:
+  INÍCIO
+    → Inicialização (cores, paths, sessão)
+    → :MENU  ←─────────────────────────────────────┐
+        [1] → :LISTAR_TUDO  → :ENCERRAR_PROCESSO   │
+        [2] → :FILTRAR      → :ENCERRAR_PROCESSO   │
+        [3] → :HISTORICO    ──────────────────────→─┘
+        [0] → :SAIR → exit
+  :ENCERRAR_PROCESSO
+    → validar PID numérico
+    → consultar PROC_NOME via for /f
+    → exibir caixa de confirmação MAGENTA
+    → taskkill /PID !PID! /F > nul 2>&1
+    → set "KILL_ERR=!ERRORLEVEL!"
+    → KILL_ERR==0 ? :KILL_SUCESSO : :KILL_FALHA
+    → :KILL_FIM → pause → :MENU
+
+================================================================================
+SEÇÃO 6 — CÓDIGO COMPLETO DE CADA LABEL
+================================================================================
+
+--- :MENU ---
+
+:MENU
+cls
+echo %CYAN%  ╔══════════════════════════════════════════════════════╗%RESET%
+echo %CYAN%  ║%BOLD%%WHITE%          GERENCIADOR DE PROCESSOS - TI              %RESET%%CYAN%║%RESET%
+echo %CYAN%  ╠══════════════════════════════════════════════════════╣%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Usuario%RESET% : %WHITE%%USERNAME%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Maquina%RESET% : %WHITE%%COMPUTERNAME%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Data/Hr%RESET% : %WHITE%%DATE% - %TIME:~0,8%%RESET%
+echo %CYAN%  ╠══════════════════════════════════════════════════════╣%RESET%
+echo %CYAN%  ║%RESET%                                                      %CYAN%║%RESET%
+echo %CYAN%  ║%RESET%    %GREEN%[1]%RESET%  Listar %WHITE%TODOS%RESET% os processos                    %CYAN%║%RESET%
+echo %CYAN%  ║%RESET%    %GREEN%[2]%RESET%  %WHITE%Filtrar%RESET% processos por nome                   %CYAN%║%RESET%
+echo %CYAN%  ║%RESET%    %BLUE%[3]%RESET%  Ver %WHITE%historico%RESET% da sessao                       %CYAN%║%RESET%
+echo %CYAN%  ║%RESET%    %RED%[0]%RESET%  Sair                                          %CYAN%║%RESET%
+echo %CYAN%  ║%RESET%                                                      %CYAN%║%RESET%
+echo %CYAN%  ╚══════════════════════════════════════════════════════╝%RESET%
+echo.
+set "OPCAO="
+echo  %YELLOW%Escolha uma opcao:%RESET%
+set /p OPCAO="  > "
+
+if "%OPCAO%"=="1" goto LISTAR_TUDO
+if "%OPCAO%"=="2" goto FILTRAR
+if "%OPCAO%"=="3" goto HISTORICO
+if "%OPCAO%"=="0" goto SAIR
+goto MENU
+
+--- :LISTAR_TUDO ---
+
+:LISTAR_TUDO
+cls
+echo %CYAN%  ╔══════════════════════════════════════════════════════╗%RESET%
+echo %CYAN%  ║%BOLD%%WHITE%           TODOS OS PROCESSOS EM EXECUCAO             %RESET%%CYAN%║%RESET%
+echo %CYAN%  ╚══════════════════════════════════════════════════════╝%RESET%
+echo.
+tasklist /FO TABLE /NH
+echo.
+echo %CYAN%  ══════════════════════════════════════════════════════%RESET%
+goto ENCERRAR_PROCESSO
+
+--- :FILTRAR ---
+
+:FILTRAR
+cls
+echo %CYAN%  ╔══════════════════════════════════════════════════════╗%RESET%
+echo %CYAN%  ║%BOLD%%WHITE%              FILTRAR PROCESSOS POR NOME              %RESET%%CYAN%║%RESET%
+echo %CYAN%  ╚══════════════════════════════════════════════════════╝%RESET%
+echo.
+set "FILTRO="
+echo  %YELLOW%Digite parte do nome %GRAY%(ex: chrome, outlook, java)%YELLOW%:%RESET%
+set /p FILTRO="  > "
+if "!FILTRO!"=="" goto MENU
+
+echo.
+echo  %CYAN_D%Exibindo processos contendo:%RESET% %WHITE%"!FILTRO!"%RESET%
+echo  %GRAY%──────────────────────────────────────────────────────%RESET%
+echo.
+echo  %YELLOW%Nome do Processo               PID        Sessao     Mem%RESET%
+echo  %GRAY%------------------------------ ---------- ---------- --------%RESET%
+tasklist /FO TABLE /NH | findstr /I "!FILTRO!"
+echo.
+echo %CYAN%  ══════════════════════════════════════════════════════%RESET%
+goto ENCERRAR_PROCESSO
+
+--- :ENCERRAR_PROCESSO ---
+
+:ENCERRAR_PROCESSO
+echo.
+set "PID="
+echo  %YELLOW%Digite o PID para encerrar %GRAY%(ou ENTER para voltar ao menu)%YELLOW%:%RESET%
+set /p PID="  > "
+if "!PID!"=="" goto MENU
+
+echo !PID!| findstr /R "^[0-9][0-9]*$" > nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo.
+    echo  %RED%[AVISO]%RESET% PID invalido. Digite apenas numeros.
+    echo.
+    pause
+    goto MENU
+)
+
+set "PROC_NOME="
+for /f "tokens=1" %%A in ('tasklist /FI "PID eq !PID!" /FO CSV /NH 2^>nul') do (
+    if not defined PROC_NOME set "PROC_NOME=%%~A"
+)
+
+if "!PROC_NOME!"=="" (
+    echo.
+    echo  %RED%[AVISO]%RESET% Nenhum processo encontrado com PID %CYAN%!PID!%RESET%.
+    echo          Verifique se o PID ainda esta ativo na lista.
+    echo.
+    pause
+    goto MENU
+)
+
+echo.
+echo  %MAGENTA%╔──────────────────────────────────────────────────╗%RESET%
+echo  %MAGENTA%║%RESET%  %YELLOW%Processo%RESET% : %WHITE%!PROC_NOME!%RESET%
+echo  %MAGENTA%║%RESET%  %YELLOW%PID     %RESET% : %CYAN%!PID!%RESET%
+echo  %MAGENTA%║%RESET%  %YELLOW%Acao    %RESET% : %RED%Encerramento forcado ^(taskkill /F^)%RESET%
+echo  %MAGENTA%╚──────────────────────────────────────────────────╝%RESET%
+echo.
+set "CONFIRM="
+echo  %YELLOW%Confirma o encerramento? %GREEN%[S]%RESET% Sim  /  %RED%[N]%RESET% Cancelar%YELLOW%:%RESET%
+set /p CONFIRM="  > "
+
+set "CONFIRM=!CONFIRM: =!"
+
+if /I "!CONFIRM!" neq "S" (
+    echo.
+    echo  %YELLOW%Operacao cancelada pelo usuario.%RESET%
+    echo.
+    pause
+    goto MENU
+)
+
+echo.
+taskkill /PID !PID! /F > nul 2>&1
+
+set "KILL_ERR=!ERRORLEVEL!"
+
+if "!KILL_ERR!"=="0" goto KILL_SUCESSO
+goto KILL_FALHA
+
+--- :KILL_SUCESSO ---
+
+:KILL_SUCESSO
+echo  %GREEN%[OK]%RESET% %WHITE%"!PROC_NOME!"%RESET% %GRAY%(PID:%RESET% %CYAN%!PID!%RESET%%GRAY%)%RESET% encerrado com sucesso!
+call :REGISTRAR_LOG "SUCESSO" "!PID!" "!PROC_NOME!"
+call :REGISTRAR_SESSAO "OK  " "!PID!" "!PROC_NOME!"
+set /a SESSAO_COUNT+=1
+goto KILL_FIM
+
+--- :KILL_FALHA ---
+
+:KILL_FALHA
+echo  %RED%[ERRO]%RESET% Nao foi possivel encerrar %WHITE%"!PROC_NOME!"%RESET% %GRAY%(PID:%RESET% %CYAN%!PID!%RESET%%GRAY%)%RESET%.
+echo         Tente executar o script como %YELLOW%Administrador%RESET%.
+call :REGISTRAR_LOG "ERRO" "!PID!" "!PROC_NOME!"
+call :REGISTRAR_SESSAO "ERRO" "!PID!" "!PROC_NOME!"
+goto KILL_FIM
+
+--- :KILL_FIM ---
+
+:KILL_FIM
+set "PROC_NOME="
+set "KILL_ERR="
+echo.
+pause
+goto MENU
+
+--- :HISTORICO ---
+
+:HISTORICO
+cls
+echo %CYAN%  ╔══════════════════════════════════════════════════════╗%RESET%
+echo %CYAN%  ║%BOLD%%WHITE%               HISTORICO DA SESSAO ATUAL              %RESET%%CYAN%║%RESET%
+echo %CYAN%  ╠══════════════════════════════════════════════════════╣%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Usuario%RESET% : %WHITE%%USERNAME%%RESET%     %YELLOW%Maquina%RESET%: %WHITE%%COMPUTERNAME%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Processos encerrados com sucesso%RESET%: %GREEN%%SESSAO_COUNT%%RESET%
+echo %CYAN%  ╚══════════════════════════════════════════════════════╝%RESET%
+echo.
+echo  %YELLOW%Hora        Status   PID          Processo%RESET%
+echo  %GRAY%─────────── ──────── ──────────── ────────────────────%RESET%
+
+set ACOES=0
+for /f "usebackq delims=" %%L in ("%SESSAO_TEMP%") do (
+    echo  %%L
+    set /a ACOES+=1
+)
+
+if %ACOES%==0 (
+    echo  %GRAY%Nenhuma acao registrada nesta sessao ainda.%RESET%
+)
+
+echo.
+echo  %GRAY%Log completo salvo em: %LOG_FILE%%RESET%
+echo.
+pause
+goto MENU
+
+--- :REGISTRAR_LOG (subrotina — chamada com call, termina com goto :EOF) ---
+
+:REGISTRAR_LOG
+echo [%DATE% %TIME:~0,8%] USER:%USERNAME% ^| PC:%COMPUTERNAME% ^| STATUS:%~1 ^| PID:%~2 ^| PROC:%~3 >> "%LOG_FILE%"
+goto :EOF
+
+--- :REGISTRAR_SESSAO (subrotina — chamada com call, termina com goto :EOF) ---
+
+:REGISTRAR_SESSAO
+echo [%TIME:~0,8%]  [%~1]  PID: %~2   ^|  Processo: %~3 >> "%SESSAO_TEMP%"
+goto :EOF
+
+--- :SAIR ---
+
+:SAIR
+cls
+echo.
+echo %CYAN%  ╔══════════════════════════════════════════════════════╗%RESET%
+echo %CYAN%  ║%BOLD%%WHITE%                RESUMO FINAL DA SESSAO                %RESET%%CYAN%║%RESET%
+echo %CYAN%  ╠══════════════════════════════════════════════════════╣%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Usuario%RESET% : %WHITE%%USERNAME%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Maquina%RESET% : %WHITE%%COMPUTERNAME%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Data/Hr%RESET% : %WHITE%%DATE% - %TIME:~0,8%%RESET%
+echo %CYAN%  ║%RESET%  %YELLOW%Processos encerrados%RESET%: %GREEN%%SESSAO_COUNT%%RESET%
+echo %CYAN%  ╚══════════════════════════════════════════════════════╝%RESET%
+echo.
+
+if %SESSAO_COUNT% gtr 0 (
+    echo  %YELLOW%Acoes realizadas:%RESET%
+    echo  %GRAY%──────────────────────────────────────────────────────%RESET%
+    for /f "usebackq delims=" %%L in ("%SESSAO_TEMP%") do echo  %%L
+    echo.
+)
+
+echo  %GRAY%Log salvo em: %LOG_FILE%%RESET%
+echo.
+if exist "%SESSAO_TEMP%" del "%SESSAO_TEMP%" > nul 2>&1
+echo  %CYAN%Saindo... Ate logo,%RESET% %WHITE%%USERNAME%%RESET%%CYAN%!%RESET%
+echo.
+timeout /t 3 > nul
+endlocal
+exit
+
+================================================================================
+SEÇÃO 7 — REGRAS CRÍTICAS DE IMPLEMENTAÇÃO
+================================================================================
+
+As regras abaixo descrevem decisões técnicas do script original que DEVEM
+ser replicadas fielmente:
+
+REGRA 1 — CAPTURA IMEDIATA DO ERRORLEVEL
+  Após o taskkill, a PRIMEIRA linha deve ser:
+    set "KILL_ERR=!ERRORLEVEL!"
+  Nunca verificar !ERRORLEVEL! diretamente depois de outro comando.
+  O roteamento usa goto separado, não if/else:
+    if "!KILL_ERR!"=="0" goto KILL_SUCESSO
+    goto KILL_FALHA
+
+REGRA 2 — HANDLERS SEPARADOS (nunca if/else com call aninhado)
+  Os handlers :KILL_SUCESSO e :KILL_FALHA são labels independentes.
+  Isso evita fechamento indevido do terminal em alguns ambientes Windows.
+  NUNCA usar este padrão:
+    if !ERRORLEVEL!==0 (call :SUCESSO) else (call :FALHA)   ← ERRADO
+
+REGRA 3 — LIMPEZA DE VARIÁVEIS DE TRABALHO
+  Em :KILL_FIM, sempre limpar:
+    set "PROC_NOME="
+    set "KILL_ERR="
+  Isso evita que valores vazem para a próxima iteração do loop.
+
+REGRA 4 — REMOÇÃO DE ESPAÇOS DA CONFIRMAÇÃO
+  Antes de comparar CONFIRM, sempre remover espaços:
+    set "CONFIRM=!CONFIRM: =!"
+  Isso evita erros por espaço acidental na digitação.
+
+REGRA 5 — VALIDAÇÃO DO PID COM REGEX
+  Usar findstr /R com expressão regular para validar PID:
+    echo !PID!| findstr /R "^[0-9][0-9]*$" > nul 2>&1
+  Se ERRORLEVEL neq 0 → PID inválido → aviso e goto MENU.
+
+REGRA 6 — OBTENÇÃO DO NOME DO PROCESSO
+  Usar for /f com CSV para extrair apenas o primeiro token (nome):
+    for /f "tokens=1" %%A in ('tasklist /FI "PID eq !PID!" /FO CSV /NH 2^>nul') do (
+        if not defined PROC_NOME set "PROC_NOME=%%~A"
+    )
+  O %%~A (com til) remove as aspas que o formato CSV inclui.
+
+REGRA 7 — SUBROTINAS TERMINAM COM goto :EOF
+  :REGISTRAR_LOG e :REGISTRAR_SESSAO são chamadas com call e
+  SEMPRE terminam com goto :EOF (não exit /b, não goto MENU).
+
+REGRA 8 — ARQUIVO DE SESSÃO DELETADO AO SAIR
+  No label :SAIR, antes de exit:
+    if exist "%SESSAO_TEMP%" del "%SESSAO_TEMP%" > nul 2>&1
+
+REGRA 9 — SEQUÊNCIA DE ENCERRAMENTO
+  O script finaliza com esta sequência exata no :SAIR:
+    timeout /t 3 > nul
+    endlocal
+    exit
+
+REGRA 10 — CARACTERES ESPECIAIS NOS ECHOES DO LOG
+  Nas subrotinas de log, o caractere | é escapado com ^| nos echoes:
+    echo ... ^| PC: ... ^| STATUS: ...
+  Isso evita que o pipe seja interpretado pelo cmd.exe.
+
+================================================================================
+SEÇÃO 8 — COMPORTAMENTOS ESPERADOS
+================================================================================
+
+COMPORTAMENTO 1 — Opção inválida no menu
+  Se o usuário digitar qualquer valor que não seja 0, 1, 2 ou 3:
+  o script faz goto MENU novamente sem mensagem de erro.
+
+COMPORTAMENTO 2 — ENTER em branco no filtro
+  Se o usuário pressionar ENTER sem digitar nada em :FILTRAR:
+  a variável FILTRO fica vazia e o script faz goto MENU.
+
+COMPORTAMENTO 3 — ENTER em branco no PID
+  Se o usuário pressionar ENTER sem digitar nada em :ENCERRAR_PROCESSO:
+  o script faz goto MENU sem aviso.
+
+COMPORTAMENTO 4 — PID não encontrado
+  Se o PID for numérico mas não existir em tasklist:
+  a variável PROC_NOME fica vazia → mensagem de aviso em RED → goto MENU.
+
+COMPORTAMENTO 5 — Confirmação case-insensitive
+  A comparação de CONFIRM usa /I:
+    if /I "!CONFIRM!" neq "S" → cancela
+  Qualquer entrada que não seja "s" ou "S" cancela a operação.
+
+COMPORTAMENTO 6 — SESSAO_COUNT só incrementa em sucesso
+  set /a SESSAO_COUNT+=1 está APENAS em :KILL_SUCESSO.
+  Tentativas que falham NÃO incrementam o contador.
+
+COMPORTAMENTO 7 — Histórico exibe "Nenhuma ação" se vazio
+  Se ACOES==0 ao ler o arquivo de sessão, exibe:
+    Nenhuma acao registrada nesta sessao ainda.  (em %GRAY%)
+
+COMPORTAMENTO 8 — Resumo final só exibe lista se SESSAO_COUNT > 0
+  O bloco de listagem de ações no :SAIR usa:
+    if %SESSAO_COUNT% gtr 0 (...)
+
+================================================================================
+SEÇÃO 9 — FORMATO DOS ARQUIVOS DE LOG
+================================================================================
+
+LOG PERSISTENTE (LOG_FILE):
+  Caminho:  C:\Logs\GerenciadorProcessos\processos_<COMPUTERNAME>.log
+  Fallback: %TEMP%\processos_<COMPUTERNAME>.log
+  Formato de cada linha:
+    [DD/MM/AAAA HH:MM:SS] USER:<username> | PC:<computername> | STATUS:<status> | PID:<pid> | PROC:<nome>
+  Exemplo:
+    [19/02/2026 14:32:11] USER:joao | PC:DESKTOP-ABC | STATUS:SUCESSO | PID:4512 | PROC:chrome.exe
+
+LOG DE SESSÃO (SESSAO_TEMP):
+  Caminho:  %TEMP%\gp_sessao_<RANDOM>.tmp
+  Vida:     Apenas durante a execução — deletado automaticamente no :SAIR
+  Formato de cada linha:
+    [HH:MM:SS]  [STATUS]  PID: <pid>   |  Processo: <nome>
+  Exemplo:
+    [14:32:11]  [OK  ]  PID: 4512   |  Processo: chrome.exe
+
+================================================================================
+SEÇÃO 10 — VALIDAÇÃO FINAL
+================================================================================
+
+Após gerar o script, verifique cada item:
+
+  [ ] @echo off, chcp 65001, setlocal enabledelayedexpansion na abertura
+  [ ] title Gerenciador de Processos - TI
+  [ ] Todos os 11 labels presentes na ordem correta
+  [ ] Bloco de cores ANSI completo com as 11 variáveis (ESC, RESET, BOLD, CYAN, CYAN_D, GREEN, RED, YELLOW, BLUE, MAGENTA, WHITE, GRAY)
+  [ ] LOG_DIR, LOG_FILE, SESSAO_TEMP, SESSAO_COUNT declarados
+  [ ] Lógica de mkdir com fallback para %TEMP%
+  [ ] echo. > "%SESSAO_TEMP%" inicializando o arquivo de sessão
+  [ ] set "KILL_ERR=!ERRORLEVEL!" imediatamente após taskkill
+  [ ] :KILL_SUCESSO e :KILL_FALHA como labels separados (não if/else)
+  [ ] set "PROC_NOME=" e set "KILL_ERR=" em :KILL_FIM
+  [ ] set "CONFIRM=!CONFIRM: =!" antes da comparação
+  [ ] Subrotinas :REGISTRAR_LOG e :REGISTRAR_SESSAO com goto :EOF
+  [ ] del "%SESSAO_TEMP%" em :SAIR antes do exit
+  [ ] Sequência final: timeout /t 3 > nul → endlocal → exit
+
+================================================================================
+FIM DO PROMPT DE RECONSTRUÇÃO
+killer.bat — Gerenciador de Processos - TI — v1.0
+================================================================================
